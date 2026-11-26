@@ -41,7 +41,7 @@ def set_korean_font():
 
 set_korean_font()
 
-# 3. 403 Forbidden 우회를 위한 브라우저 헤더 포함 CSV 로더
+# 3. 403 Forbidden 우회 및 로컬/원격 CSV 겸용 로더
 def fetch_csv_with_headers(url):
     req = urllib.request.Request(
         url,
@@ -55,11 +55,15 @@ def fetch_csv_with_headers(url):
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def load_owid_data():
-    url_objects = "https://ourworldindata.org/grapher/low-earth-orbits-objects.csv?v=1&csvType=full&useColumnShortNames=true"
-    url_cost = "https://ourworldindata.org/grapher/cost-space-launches-low-earth-orbit.csv?v=1&csvType=full&useColumnShortNames=true"
-    
-    df_obj = fetch_csv_with_headers(url_objects)
-    df_cost = fetch_csv_with_headers(url_cost)
+    # 로컬 파일이 있으면 우선 사용하고, 없으면 OWID 서버에서 직접 가져옴
+    if os.path.exists("low-earth-orbits-objects.csv") and os.path.exists("cost-space-launches-low-earth-orbit.csv"):
+        df_obj = pd.read_csv("low-earth-orbits-objects.csv")
+        df_cost = pd.read_csv("cost-space-launches-low-earth-orbit.csv")
+    else:
+        url_objects = "https://ourworldindata.org/grapher/low-earth-orbits-objects.csv?v=1&csvType=full&useColumnShortNames=true"
+        url_cost = "https://ourworldindata.org/grapher/cost-space-launches-low-earth-orbit.csv?v=1&csvType=full&useColumnShortNames=true"
+        df_obj = fetch_csv_with_headers(url_objects)
+        df_cost = fetch_csv_with_headers(url_cost)
     return df_obj, df_cost
 
 # 메인 타이틀 및 소개
@@ -86,27 +90,58 @@ max_penalty_ratio = st.sidebar.slider(
     help="우주 쓰레기가 최대치일 때 방호 장갑 및 회피 연료로 추가되는 질량 비율"
 ) / 100.0
 
-# 5. 데이터 전처리 및 병합
-obj_val_col = df_obj.columns[-1]
-debris_types = ['Debris', 'Rocket bodies']
-df_debris = (
-    df_obj[df_obj['Entity'].isin(debris_types)]
-    .groupby('Year')[obj_val_col]
-    .sum()
-    .reset_index()
-    .rename(columns={obj_val_col: 'Debris_Count'})
-)
+# 5. 데이터 전처리 (가로형/세로형 CSV 구조 자동 인식)
+# 5-1. 우주물체 데이터 전처리
+df_obj.columns = df_obj.columns.str.strip()
+year_col_obj = [c for c in df_obj.columns if 'year' in c.lower()][0]
 
-cost_val_col = df_cost.columns[-1]
-df_launch_cost = (
-    df_cost.groupby('Year')[cost_val_col]
-    .mean()
-    .reset_index()
-    .rename(columns={cost_val_col: 'Cost_Per_Kg'})
-)
+if 'Entity' in df_obj.columns:
+    # 세로형(Long format) 데이터인 경우
+    obj_val_col = df_obj.columns[-1]
+    debris_types = ['Debris', 'Rocket bodies']
+    df_debris = (
+        df_obj[df_obj['Entity'].isin(debris_types)]
+        .groupby(year_col_obj)[obj_val_col]
+        .sum()
+        .reset_index()
+        .rename(columns={year_col_obj: 'Year', obj_val_col: 'Debris_Count'})
+    )
+else:
+    # 가로형(Wide format) 데이터인 경우: 열 이름에 debris 또는 rocket이 포함된 열 합산
+    debris_cols = [c for c in df_obj.columns if 'debris' in c.lower() or 'rocket' in c.lower()]
+    if not debris_cols:
+        # 못 찾을 경우 Year를 제외한 모든 수치형 열 합산
+        debris_cols = [c for c in df_obj.columns if c != year_col_obj and pd.api.types.is_numeric_dtype(df_obj[c])]
+    df_obj['Debris_Count'] = df_obj[debris_cols].fillna(0).sum(axis=1)
+    df_debris = df_obj[[year_col_obj, 'Debris_Count']].rename(columns={year_col_obj: 'Year'})
 
-df_merged = pd.merge(df_debris, df_launch_cost, on='Year', how='inner')
+# 5-2. 발사 단가 데이터 전처리
+df_cost.columns = df_cost.columns.str.strip()
+year_col_cost = [c for c in df_cost.columns if 'year' in c.lower()][0]
+
+if 'Entity' in df_cost.columns:
+    cost_val_col = df_cost.columns[-1]
+    df_launch_cost = (
+        df_cost.groupby(year_col_cost)[cost_val_col]
+        .mean()
+        .reset_index()
+        .rename(columns={year_col_cost: 'Year', cost_val_col: 'Cost_Per_Kg'})
+    )
+else:
+    cost_cols = [c for c in df_cost.columns if c != year_col_cost and pd.api.types.is_numeric_dtype(df_cost[c])]
+    df_cost['Cost_Per_Kg'] = df_cost[cost_cols].mean(axis=1)
+    df_launch_cost = df_cost[[year_col_cost, 'Cost_Per_Kg']].rename(columns={year_col_cost: 'Year'})
+
+# 5-3. 연도(Year) 기준 병합
+df_debris['Year'] = pd.to_numeric(df_debris['Year'], errors='coerce')
+df_launch_cost['Year'] = pd.to_numeric(df_launch_cost['Year'], errors='coerce')
+
+df_merged = pd.merge(df_debris, df_launch_cost, on='Year', how='inner').dropna()
 df_merged = df_merged[df_merged['Year'] >= start_year].sort_values('Year').reset_index(drop=True)
+
+if df_merged.empty:
+    st.warning("선택한 시작 연도 이후로 두 데이터가 겹치는 연도가 없습니다. 시작 연도를 낮춰보세요.")
+    st.stop()
 
 # 경제성 저하 지표 산출
 debris_norm = df_merged['Debris_Count'] / df_merged['Debris_Count'].max()
@@ -213,6 +248,7 @@ with tab3:
         'Payload_Efficiency_Pct': '임무 탑재 효율(%)'
     })
     st.dataframe(display_df.style.format({
+        '연도': '{:.0f}',
         '우주 쓰레기 수(개)': '{:,.0f}',
         '평균 발사 단가($/kg)': '${:,.1f}',
         '방호·회피 추가 질량(kg)': '{:,.1f} kg',
