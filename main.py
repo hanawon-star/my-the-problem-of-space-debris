@@ -3,6 +3,8 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.font_manager as fm
+import urllib.request
+import io
 import os
 
 # 1. 페이지 기본 설정
@@ -39,14 +41,25 @@ def set_korean_font():
 
 set_korean_font()
 
-# 3. 데이터 로드 함수 (show_spinner=False로 DOM 노드 교체 충돌 방지)
+# 3. 403 Forbidden 우회를 위한 브라우저 헤더 포함 CSV 로더
+def fetch_csv_with_headers(url):
+    req = urllib.request.Request(
+        url,
+        headers={
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+        }
+    )
+    with urllib.request.urlopen(req) as response:
+        csv_text = response.read().decode('utf-8')
+    return pd.read_csv(io.StringIO(csv_text))
+
 @st.cache_data(ttl=3600, show_spinner=False)
 def load_owid_data():
     url_objects = "https://ourworldindata.org/grapher/low-earth-orbits-objects.csv?v=1&csvType=full&useColumnShortNames=true"
     url_cost = "https://ourworldindata.org/grapher/cost-space-launches-low-earth-orbit.csv?v=1&csvType=full&useColumnShortNames=true"
     
-    df_obj = pd.read_csv(url_objects)
-    df_cost = pd.read_csv(url_cost)
+    df_obj = fetch_csv_with_headers(url_objects)
+    df_cost = fetch_csv_with_headers(url_cost)
     return df_obj, df_cost
 
 # 메인 타이틀 및 소개
