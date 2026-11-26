@@ -12,9 +12,19 @@ st.set_page_config(
     layout="wide"
 )
 
-# 2. 한글 폰트 설정 (Streamlit Cloud 리눅스 환경 및 로컬 OS 대응)
+# 브라우저 자동 번역기로 인한 React DOM(removeChild) 충돌 방지
+st.markdown(
+    """
+    <meta name="google" content="notranslate">
+    <style>
+        .stApp { translate: no; }
+    </style>
+    """,
+    unsafe_allow_html=True
+)
+
+# 2. 한글 폰트 설정
 def set_korean_font():
-    # Streamlit Cloud에 나눔고딕이 설치되어 있는 경우 우선 적용
     font_paths = [
         "/usr/share/fonts/truetype/nanum/NanumGothic.ttf",
         "C:/Windows/Fonts/malgun.ttf",
@@ -29,8 +39,8 @@ def set_korean_font():
 
 set_korean_font()
 
-# 3. 데이터 로드 함수 (캐싱 적용으로 빠른 실행)
-@st.cache_data(ttl=3600)
+# 3. 데이터 로드 함수 (show_spinner=False로 DOM 노드 교체 충돌 방지)
+@st.cache_data(ttl=3600, show_spinner=False)
 def load_owid_data():
     url_objects = "https://ourworldindata.org/grapher/low-earth-orbits-objects.csv?v=1&csvType=full&useColumnShortNames=true"
     url_cost = "https://ourworldindata.org/grapher/cost-space-launches-low-earth-orbit.csv?v=1&csvType=full&useColumnShortNames=true"
@@ -46,10 +56,9 @@ st.markdown("""
 우주 쓰레기 급증이 군사 위성의 **방호 설계·회피 기동 연료 부담 및 경제적 기회비용**에 미치는 영향을 분석합니다.
 """)
 
-# 데이터 불러오기 실행
+# 데이터 불러오기
 try:
-    with st.spinner("OWID 서버에서 최신 우주 데이터를 불러오는 중입니다..."):
-        df_obj, df_cost = load_owid_data()
+    df_obj, df_cost = load_owid_data()
 except Exception as e:
     st.error(f"데이터를 불러오는 중 오류가 발생했습니다: {e}")
     st.stop()
@@ -148,12 +157,12 @@ with tab1:
     ax1.set_title('저궤도 우주 쓰레기 급증 vs kg당 발사 단가 추이', fontsize=13, fontweight='bold', pad=12)
     
     st.pyplot(fig1)
+    plt.close(fig1)
     st.info("💡 **해석 포인트:** 재사용 로켓 등장으로 kg당 발사 단가(파란 점선)는 하락했으나, 우주 쓰레기(빨간 실선)가 폭증하면서 군사 위성은 발사 비용 절감 효과를 온전히 누리지 못하고 방호 및 회피 기동에 추가 자원을 소모하게 됩니다.")
 
 with tab2:
     fig2, (ax2_left, ax2_right) = plt.subplots(1, 2, figsize=(13, 5), dpi=130)
 
-    # 좌측: 우주 쓰레기 수 vs 방호·회피 추가 질량 산점도
     sc = ax2_left.scatter(
         df_merged['Debris_Count'], df_merged['Extra_Mass_kg'],
         c=df_merged['Year'], cmap='viridis', s=65, edgecolors='black', alpha=0.85
@@ -168,7 +177,6 @@ with tab2:
     ax2_left.legend()
     plt.colorbar(sc, ax=ax2_left, label='연도')
 
-    # 우측: 연도별 임무 탑재체 효율성 변화
     ax2_right.plot(df_merged['Year'], df_merged['Payload_Efficiency_Pct'], color='#2E8B57', linewidth=2.5, marker='d', markersize=4)
     ax2_right.fill_between(df_merged['Year'], df_merged['Payload_Efficiency_Pct'], df_merged['Payload_Efficiency_Pct'].min() - 2, color='#2E8B57', alpha=0.15)
     ax2_right.set_title('연도별 군사 위성 핵심 임무 장비 탑재 효율(%) 변화', fontsize=12, fontweight='bold')
@@ -179,6 +187,7 @@ with tab2:
 
     plt.tight_layout()
     st.pyplot(fig2)
+    plt.close(fig2)
 
 with tab3:
     st.subheader("연도별 병합 데이터 테이블")
@@ -196,7 +205,7 @@ with tab3:
         '방호·회피 추가 질량(kg)': '{:,.1f} kg',
         '추가 발사 비용($M)': '${:,.2f}M',
         '임무 탑재 효율(%)': '{:.1f}%'
-    }), use_container_width=True)
+    }), width="stretch")
 
     csv_data = display_df.to_csv(index=False).encode('utf-8-sig')
     st.download_button(
