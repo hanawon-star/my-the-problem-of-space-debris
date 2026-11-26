@@ -25,21 +25,25 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-# 2. 한글 폰트 설정
-def set_korean_font():
-    font_paths = [
+# 2. 한글 폰트 강제 등록 및 설정 (리눅스/윈도우/맥 완벽 대응)
+def get_korean_font():
+    font_candidates = [
         "/usr/share/fonts/truetype/nanum/NanumGothic.ttf",
+        "/usr/share/fonts/truetype/nanum/NanumBarunGothic.ttf",
         "C:/Windows/Fonts/malgun.ttf",
         "/System/Library/Fonts/Supplemental/AppleGothic.ttf"
     ]
-    for path in font_paths:
+    for path in font_candidates:
         if os.path.exists(path):
+            fm.fontManager.addfont(path)
             font_prop = fm.FontProperties(fname=path)
             plt.rcParams['font.family'] = font_prop.get_name()
-            break
+            plt.rcParams['axes.unicode_minus'] = False
+            return font_prop
     plt.rcParams['axes.unicode_minus'] = False
+    return None
 
-set_korean_font()
+kor_font = get_korean_font()
 
 # 3. 403 Forbidden 우회 및 로컬/원격 CSV 겸용 로더
 def fetch_csv_with_headers(url):
@@ -50,15 +54,14 @@ def fetch_csv_with_headers(url):
         }
     )
     with urllib.request.urlopen(req) as response:
-        csv_text = response.read().decode('utf-8')
+        csv_text = response.read().decode('utf-8-sig')
     return pd.read_csv(io.StringIO(csv_text))
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def load_owid_data():
-    # 로컬 파일이 있으면 우선 사용하고, 없으면 OWID 서버에서 직접 가져옴
     if os.path.exists("low-earth-orbits-objects.csv") and os.path.exists("cost-space-launches-low-earth-orbit.csv"):
-        df_obj = pd.read_csv("low-earth-orbits-objects.csv")
-        df_cost = pd.read_csv("cost-space-launches-low-earth-orbit.csv")
+        df_obj = pd.read_csv("low-earth-orbits-objects.csv", encoding="utf-8-sig")
+        df_cost = pd.read_csv("cost-space-launches-low-earth-orbit.csv", encoding="utf-8-sig")
     else:
         url_objects = "https://ourworldindata.org/grapher/low-earth-orbits-objects.csv?v=1&csvType=full&useColumnShortNames=true"
         url_cost = "https://ourworldindata.org/grapher/cost-space-launches-low-earth-orbit.csv?v=1&csvType=full&useColumnShortNames=true"
@@ -91,12 +94,10 @@ max_penalty_ratio = st.sidebar.slider(
 ) / 100.0
 
 # 5. 데이터 전처리 (가로형/세로형 CSV 구조 자동 인식)
-# 5-1. 우주물체 데이터 전처리
 df_obj.columns = df_obj.columns.str.strip()
 year_col_obj = [c for c in df_obj.columns if 'year' in c.lower()][0]
 
 if 'Entity' in df_obj.columns:
-    # 세로형(Long format) 데이터인 경우
     obj_val_col = df_obj.columns[-1]
     debris_types = ['Debris', 'Rocket bodies']
     df_debris = (
@@ -107,15 +108,12 @@ if 'Entity' in df_obj.columns:
         .rename(columns={year_col_obj: 'Year', obj_val_col: 'Debris_Count'})
     )
 else:
-    # 가로형(Wide format) 데이터인 경우: 열 이름에 debris 또는 rocket이 포함된 열 합산
     debris_cols = [c for c in df_obj.columns if 'debris' in c.lower() or 'rocket' in c.lower()]
     if not debris_cols:
-        # 못 찾을 경우 Year를 제외한 모든 수치형 열 합산
         debris_cols = [c for c in df_obj.columns if c != year_col_obj and pd.api.types.is_numeric_dtype(df_obj[c])]
     df_obj['Debris_Count'] = df_obj[debris_cols].fillna(0).sum(axis=1)
     df_debris = df_obj[[year_col_obj, 'Debris_Count']].rename(columns={year_col_obj: 'Year'})
 
-# 5-2. 발사 단가 데이터 전처리
 df_cost.columns = df_cost.columns.str.strip()
 year_col_cost = [c for c in df_cost.columns if 'year' in c.lower()][0]
 
@@ -132,7 +130,6 @@ else:
     df_cost['Cost_Per_Kg'] = df_cost[cost_cols].mean(axis=1)
     df_launch_cost = df_cost[[year_col_cost, 'Cost_Per_Kg']].rename(columns={year_col_cost: 'Year'})
 
-# 5-3. 연도(Year) 기준 병합
 df_debris['Year'] = pd.to_numeric(df_debris['Year'], errors='coerce')
 df_launch_cost['Year'] = pd.to_numeric(df_launch_cost['Year'], errors='coerce')
 
@@ -180,7 +177,8 @@ col4.metric(
 
 st.divider()
 
-# 7. 시각화 섹션
+# 7. 시각화 섹션 (폰트 속성 명시적 적용으로 깨짐 원천 차단)
+font_kwargs = {'fontproperties': kor_font} if kor_font else {}
 tab1, tab2, tab3 = st.tabs(["📊 핵심 비교 그래프", "📈 상관관계 및 효율성 분석", "📋 병합 원시 데이터"])
 
 with tab1:
@@ -189,20 +187,20 @@ with tab1:
     color_cost = '#2B5C8F'
 
     line1 = ax1.plot(df_merged['Year'], df_merged['Debris_Count'], color=color_debris, linewidth=2.5, marker='o', markersize=4, label='우주 쓰레기 수 (개)')
-    ax1.set_xlabel('연도 (Year)', fontsize=11)
-    ax1.set_ylabel('누적 우주 쓰레기 수 (Debris + Rocket Bodies)', color=color_debris, fontsize=11, fontweight='bold')
+    ax1.set_xlabel('연도 (Year)', fontsize=11, **font_kwargs)
+    ax1.set_ylabel('누적 우주 쓰레기 수 (Debris + Rocket Bodies)', color=color_debris, fontsize=11, fontweight='bold', **font_kwargs)
     ax1.tick_params(axis='y', labelcolor=color_debris)
     ax1.grid(True, linestyle='--', alpha=0.4)
 
     ax1_sub = ax1.twinx()
     line2 = ax1_sub.plot(df_merged['Year'], df_merged['Cost_Per_Kg'], color=color_cost, linewidth=2, linestyle='--', marker='s', markersize=4, label='kg당 발사 단가 ($/kg)')
-    ax1_sub.set_ylabel('저궤도 발사 단가 ($/kg)', color=color_cost, fontsize=11, fontweight='bold')
+    ax1_sub.set_ylabel('저궤도 발사 단가 ($/kg)', color=color_cost, fontsize=11, fontweight='bold', **font_kwargs)
     ax1_sub.tick_params(axis='y', labelcolor=color_cost)
 
     lines = line1 + line2
     labels = [l.get_label() for l in lines]
-    ax1.legend(lines, labels, loc='upper left', frameon=True)
-    ax1.set_title('저궤도 우주 쓰레기 급증 vs kg당 발사 단가 추이', fontsize=13, fontweight='bold', pad=12)
+    ax1.legend(lines, labels, loc='upper left', frameon=True, prop=kor_font)
+    ax1.set_title('저궤도 우주 쓰레기 급증 vs kg당 발사 단가 추이', fontsize=13, fontweight='bold', pad=12, **font_kwargs)
     
     st.pyplot(fig1)
     plt.close(fig1)
@@ -218,18 +216,19 @@ with tab2:
     z = np.polyfit(df_merged['Debris_Count'], df_merged['Extra_Mass_kg'], 1)
     p = np.poly1d(z)
     ax2_left.plot(df_merged['Debris_Count'], p(df_merged['Debris_Count']), color='#D9534F', linestyle='--', linewidth=2, label='선형 회귀 추세선')
-    ax2_left.set_title('우주 쓰레기 수 vs 방호·회피 추가 질량', fontsize=12, fontweight='bold')
-    ax2_left.set_xlabel('저궤도 우주 쓰레기 수 (개)')
-    ax2_left.set_ylabel('위성 1기당 추가 질량 (kg)')
+    ax2_left.set_title('우주 쓰레기 수 vs 방호·회피 추가 질량', fontsize=12, fontweight='bold', **font_kwargs)
+    ax2_left.set_xlabel('저궤도 우주 쓰레기 수 (개)', **font_kwargs)
+    ax2_left.set_ylabel('위성 1기당 추가 질량 (kg)', **font_kwargs)
     ax2_left.grid(True, linestyle='--', alpha=0.4)
-    ax2_left.legend()
-    plt.colorbar(sc, ax=ax2_left, label='연도')
+    ax2_left.legend(prop=kor_font)
+    cbar = plt.colorbar(sc, ax=ax2_left)
+    cbar.set_label('연도', **font_kwargs)
 
     ax2_right.plot(df_merged['Year'], df_merged['Payload_Efficiency_Pct'], color='#2E8B57', linewidth=2.5, marker='d', markersize=4)
     ax2_right.fill_between(df_merged['Year'], df_merged['Payload_Efficiency_Pct'], df_merged['Payload_Efficiency_Pct'].min() - 2, color='#2E8B57', alpha=0.15)
-    ax2_right.set_title('연도별 군사 위성 핵심 임무 장비 탑재 효율(%) 변화', fontsize=12, fontweight='bold')
-    ax2_right.set_xlabel('연도 (Year)')
-    ax2_right.set_ylabel('핵심 임무 탑재 비율 (%)')
+    ax2_right.set_title('연도별 군사 위성 핵심 임무 장비 탑재 효율(%) 변화', fontsize=12, fontweight='bold', **font_kwargs)
+    ax2_right.set_xlabel('연도 (Year)', **font_kwargs)
+    ax2_right.set_ylabel('핵심 임무 탑재 비율 (%)', **font_kwargs)
     ax2_right.set_ylim(df_merged['Payload_Efficiency_Pct'].min() - 2, 100)
     ax2_right.grid(True, linestyle='--', alpha=0.4)
 
